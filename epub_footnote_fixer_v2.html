@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EPUB Footnote Fixer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap');
+
+:root {
+  --bg: #0c0c0e;
+  --surface: #141416;
+  --surface2: #1c1c20;
+  --border: #252528;
+  --accent: #c8f135;
+  --accent2: #35f1c8;
+  --text: #f0f0f0;
+  --muted: #555;
+  --muted2: #888;
+  --error: #f13565;
+  --warn: #f1a835;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── Background grain ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+}
+
+.page { position: relative; z-index: 1; max-width: 680px; margin: 0 auto; padding: 60px 24px 80px; }
+
+/* ── Header ── */
+.header { margin-bottom: 56px; }
+
+.header-tag {
+  font-size: 10px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-tag::before {
+  content: '';
+  display: inline-block;
+  width: 24px;
+  height: 1px;
+  background: var(--accent);
+}
+
+h1 {
+  font-family: 'Syne', sans-serif;
+  font-size: clamp(32px, 6vw, 52px);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -1.5px;
+  color: var(--text);
+  margin-bottom: 16px;
+}
+
+h1 em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.header-sub {
+  font-size: 12px;
+  color: var(--muted2);
+  line-height: 1.8;
+  max-width: 440px;
+}
+
+/* ── Drop zone ── */
+.drop-zone {
+  border: 1.5px dashed var(--border);
+  border-radius: 8px;
+  padding: 56px 32px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.25s;
+  position: relative;
+  background: var(--surface);
+  margin-bottom: 20px;
+}
+
+.drop-zone:hover, .drop-zone.over {
+  border-color: var(--accent);
+  background: rgba(200, 241, 53, 0.04);
+}
+
+.drop-zone input {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+}
+
+.dz-icon {
+  width: 48px; height: 48px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 20px;
+  font-size: 22px;
+  transition: all 0.25s;
+  background: var(--surface2);
+}
+
+.drop-zone:hover .dz-icon, .drop-zone.over .dz-icon {
+  border-color: var(--accent);
+  background: rgba(200,241,53,0.08);
+}
+
+.dz-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+
+.dz-sub { font-size: 11px; color: var(--muted); }
+.dz-sub strong { color: var(--accent2); }
+
+/* ── Options ── */
+.options {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.opt-info { flex: 1; }
+.opt-title { font-size: 12px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+.opt-desc { font-size: 11px; color: var(--muted); line-height: 1.5; }
+
+.toggle { position: relative; flex-shrink: 0; }
+.toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.knob {
+  display: block; width: 42px; height: 23px;
+  background: var(--border); border-radius: 12px;
+  cursor: pointer; transition: background 0.2s; position: relative;
+}
+.knob::after {
+  content: ''; position: absolute;
+  width: 17px; height: 17px; background: var(--muted);
+  border-radius: 50%; top: 3px; left: 3px; transition: all 0.2s;
+}
+.toggle input:checked + .knob { background: rgba(200,241,53,0.25); }
+.toggle input:checked + .knob::after { background: var(--accent); left: 22px; }
+
+/* ── Progress ── */
+#progressWrap {
+  display: none;
+  margin-bottom: 24px;
+}
+
+.prog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.prog-label { font-size: 11px; color: var(--muted2); }
+.prog-pct { font-size: 11px; color: var(--accent); font-weight: 500; }
+
+.prog-bar {
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.prog-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  width: 0%;
+  transition: width 0.3s ease;
+}
+
+.prog-steps { display: flex; flex-direction: column; gap: 6px; }
+
+.prog-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--muted);
+  transition: color 0.2s;
+}
+
+.prog-step.active { color: var(--text); }
+.prog-step.done { color: var(--accent2); }
+.prog-step.err { color: var(--error); }
+
+.step-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.prog-step.active .step-dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.prog-step.done .step-dot { background: var(--accent2); }
+.prog-step.err .step-dot { background: var(--error); }
+
+/* ── Result ── */
+#resultWrap { display: none; margin-bottom: 24px; }
+
+.result-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.result-card.success { border-color: rgba(200,241,53,0.25); }
+.result-card.error { border-color: rgba(241,53,101,0.25); }
+
+.result-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.result-icon { font-size: 24px; }
+
+.result-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.result-card.success .result-title { color: var(--accent); }
+.result-card.error .result-title { color: var(--error); }
+
+.result-sub { font-size: 11px; color: var(--muted2); }
+
+.result-stats {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.stat {
+  flex: 1;
+  padding: 16px 20px;
+  border-right: 1px solid var(--border);
+  text-align: center;
+}
+.stat:last-child { border-right: none; }
+
+.stat-n {
+  font-family: 'Syne', sans-serif;
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--accent);
+  display: block;
+  margin-bottom: 2px;
+}
+
+.stat-label { font-size: 10px; color: var(--muted); letter-spacing: 1px; text-transform: uppercase; }
+
+.result-log {
+  padding: 16px 20px;
+  max-height: 180px;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.log-line {
+  font-size: 10px;
+  padding: 3px 0;
+  color: var(--muted2);
+  display: flex;
+  gap: 10px;
+  line-height: 1.5;
+}
+
+.log-line .lt { flex-shrink: 0; width: 48px; font-weight: 500; }
+.lt-fix { color: var(--accent); }
+.lt-ok { color: var(--accent2); }
+.lt-skip { color: var(--muted); }
+.lt-err { color: var(--error); }
+.lt-info { color: var(--warn); }
+
+.result-actions { padding: 20px 24px; }
+
+.dl-btn {
+  width: 100%;
+  padding: 16px;
+  background: var(--accent);
+  color: #0c0c0e;
+  border: none;
+  border-radius: 6px;
+  font-family: 'Syne', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.dl-btn:hover { background: #d8ff55; transform: translateY(-1px); }
+
+.reset-btn {
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted2);
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.reset-btn:hover { border-color: var(--muted2); color: var(--text); }
+
+/* ── About ── */
+.about {
+  margin-top: 56px;
+  padding-top: 40px;
+  border-top: 1px solid var(--border);
+}
+
+.about-title {
+  font-family: 'Syne', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 24px;
+}
+
+.about-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+
+.about-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.about-card-icon { font-size: 18px; margin-bottom: 10px; display: block; }
+.about-card-title { font-size: 12px; font-weight: 500; color: var(--text); margin-bottom: 6px; font-family: 'Syne', sans-serif; }
+.about-card-body { font-size: 11px; color: var(--muted2); line-height: 1.7; }
+
+.about-note {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.8;
+  padding: 14px 16px;
+  background: var(--surface);
+  border-left: 2px solid var(--border);
+  border-radius: 0 4px 4px 0;
+}
+
+.about-note a { color: var(--accent2); text-decoration: none; border-bottom: 1px solid rgba(53,241,200,0.3); }
+.about-note a:hover { border-color: var(--accent2); }
+
+@media (max-width: 480px) {
+  .about-grid { grid-template-columns: 1fr; }
+  h1 { font-size: 32px; }
+  .result-stats { flex-wrap: wrap; }
+  .stat { min-width: 50%; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-tag">EPUB repair tool · v2.0</div>
+    <h1>Footnote<br><em>Fixer</em></h1>
+    <p class="header-sub">Drop your EPUB below. The tool unpacks it, fixes the broken footnote anchors, cleans up the back-links, and hands you a repaired EPUB — all in your browser.</p>
+  </div>
+
+  <!-- Drop zone -->
+  <div class="drop-zone" id="dropZone">
+    <input type="file" id="fileInput" accept=".epub" />
+    <div class="dz-icon">📖</div>
+    <div class="dz-title">Drop your EPUB here</div>
+    <p class="dz-sub">or click to browse &nbsp;·&nbsp; <strong>.epub files only</strong></p>
+  </div>
+
+  <!-- Options -->
+  <div class="options">
+    <div class="opt-info">
+      <div class="opt-title">Replace back-links with ↩ symbol</div>
+      <div class="opt-desc">Turns "BACK TO NOTE REFERENCE X" into a small tappable arrow. Cleaner, still functional.</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" id="backlinkToggle" checked />
+      <span class="knob"></span>
+    </label>
+  </div>
+
+  <!-- Progress -->
+  <div id="progressWrap">
+    <div class="prog-header">
+      <span class="prog-label" id="progLabel">Processing…</span>
+      <span class="prog-pct" id="progPct">0%</span>
+    </div>
+    <div class="prog-bar"><div class="prog-fill" id="progFill"></div></div>
+    <div class="prog-steps">
+      <div class="prog-step" id="ps-unzip"><span class="step-dot"></span>Unpacking EPUB</div>
+      <div class="prog-step" id="ps-detect"><span class="step-dot"></span>Detecting endnotes file</div>
+      <div class="prog-step" id="ps-map"><span class="step-dot"></span>Building anchor map</div>
+      <div class="prog-step" id="ps-fix"><span class="step-dot"></span>Fixing footnote links</div>
+      <div class="prog-step" id="ps-backlink"><span class="step-dot"></span>Styling back-links</div>
+      <div class="prog-step" id="ps-pack"><span class="step-dot"></span>Repacking EPUB</div>
+    </div>
+  </div>
+
+  <!-- Result -->
+  <div id="resultWrap"></div>
+
+  <!-- About -->
+  <div class="about">
+    <div class="about-title">About this tool</div>
+    <div class="about-grid">
+      <div class="about-card">
+        <span class="about-card-icon">🐛</span>
+        <div class="about-card-title">The bug</div>
+        <div class="about-card-body">KF8 Joint MOBI files store footnote anchors in a way that shifts them by one when converted to EPUB. Tapping note 2 jumps to note 1, note 3 to note 2, and so on.</div>
+      </div>
+      <div class="about-card">
+        <span class="about-card-icon">🔧</span>
+        <div class="about-card-title">The fix</div>
+        <div class="about-card-body">The tool rewires every footnote link to point to the correct anchor, and optionally replaces verbose back-link text with a clean ↩ symbol.</div>
+      </div>
+      <div class="about-card">
+        <span class="about-card-icon">📱</span>
+        <div class="about-card-title">Who is this for</div>
+        <div class="about-card-body">Boox e-reader users (NeoReader) who converted Kindle books to EPUB and found footnote navigation broken.</div>
+      </div>
+      <div class="about-card">
+        <span class="about-card-icon">🔒</span>
+        <div class="about-card-title">Privacy</div>
+        <div class="about-card-body">Your file never leaves your device. Everything runs locally in the browser — no server, no upload, no tracking.</div>
+      </div>
+    </div>
+    <div class="about-note">
+      For best results, first unpack your MOBI using <a href="https://www.mobileread.com/forums/showthread.php?t=61986" target="_blank">KindleUnpack GUI</a> to get the clean KF8 source, then zip the <code>mobi8</code> folder into an EPUB before using this tool. This ensures the table of contents is also correct.
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── JSZip is loaded from CDN above ──
+
+const dropZone   = document.getElementById('dropZone');
+const fileInput  = document.getElementById('fileInput');
+const progWrap   = document.getElementById('progressWrap');
+const resultWrap = document.getElementById('resultWrap');
+
+// ── Drop / file select ──
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) processEpub(fileInput.files[0]); });
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('over');
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith('.epub')) processEpub(f);
+  else showError('Please drop an .epub file.');
+});
+
+// ── Progress helpers ──
+function setStep(id, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'prog-step ' + state;
+}
+
+function setProgress(pct, label) {
+  document.getElementById('progFill').style.width = pct + '%';
+  document.getElementById('progPct').textContent = pct + '%';
+  if (label) document.getElementById('progLabel').textContent = label;
+}
+
+function yield_() { return new Promise(r => setTimeout(r, 0)); }
+
+// ── Core anchor-map builder ──
+function buildIdToNoteMap(xhtmlText) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xhtmlText, 'application/xhtml+xml');
+  const map = {};
+
+  const ols = doc.querySelectorAll('ol.endnotes');
+  ols.forEach(ol => {
+    const items = Array.from(ol.querySelectorAll(':scope > li[id]'));
+    items.forEach((li, idx) => {
+      li._noteId = li.id;
+      const ids = [];
+      li.querySelectorAll('[id]').forEach(el => ids.push(el.id));
+      li._allIds = ids;
+    });
+    items.forEach((li, idx) => {
+      const noteId = li._noteId;
+      if (!noteId) return;
+      if (idx === 0 && ol.id) map[ol.id] = noteId;
+      if (idx + 1 < items.length) {
+        const nextId = items[idx + 1]._noteId;
+        (li._allIds || []).forEach(id => { map[id] = nextId; });
+      }
+    });
+  });
+  return map;
+}
+
+// ── Fix chapter file anchor links ──
+function fixChapterFile(html, map, endnotesBasename) {
+  let fixes = 0;
+  const fixed = html.replace(
+    /(<a\b[^>]*\bhref=["'])([^"'#]*)#([^"']+)(["'][^>]*>)/g,
+    (match, prefix, file, fragment, suffix) => {
+      if (!file.includes(endnotesBasename.replace(/\.xhtml$/, ''))) return match;
+      const correct = map[fragment];
+      if (correct && correct !== fragment) { fixes++; return `${prefix}${file}#${correct}${suffix}`; }
+      return match;
+    }
+  );
+  return { fixed, fixes };
+}
+
+// ── Style back-links ──
+function styleBacklinks(html) {
+  let count = 0;
+  let result = html.replace(
+    /<p[^>]*class="[^"]*link_to_text[^"]*"[^>]*>[\s\S]*?<a([^>]*role="doc-backlink"[^>]*)>[\s\S]*?<\/a>[\s\S]*?<\/p>/g,
+    (match, attrs) => { count++; return `<a${attrs} style="font-size:0.75em;color:#888;text-decoration:none;display:inline-block;margin-top:4px;">↩</a>`; }
+  );
+  result = result.replace(
+    /(<a[^>]*role="doc-backlink"[^>]*>)[\s\S]*?(<\/a>)/g,
+    (match, open, close) => {
+      if (match.includes('↩')) return match;
+      const styled = open.replace(/<a/, '<a style="font-size:0.75em;color:#888;text-decoration:none;display:inline-block;margin-top:4px;"');
+      count++;
+      return `${styled}↩${close}`;
+    }
+  );
+  return { result, count };
+}
+
+// ── Main processor ──
+async function processEpub(file) {
+  // Reset UI
+  resultWrap.style.display = 'none';
+  resultWrap.innerHTML = '';
+  progWrap.style.display = 'block';
+  dropZone.style.display = 'none';
+  document.querySelector('.options').style.display = 'none';
+  ['ps-unzip','ps-detect','ps-map','ps-fix','ps-backlink','ps-pack'].forEach(id => setStep(id, ''));
+  setProgress(0, 'Starting…');
+
+  const doBacklinks = document.getElementById('backlinkToggle').checked;
+  const logs = [];
+  function log(type, msg) { logs.push({ type, msg }); }
+
+  try {
+    // ── 1. Unzip ──
+    setStep('ps-unzip', 'active');
+    setProgress(5, 'Unpacking EPUB…');
+    await yield_();
+
+    const zip = await JSZip.loadAsync(file);
+    setStep('ps-unzip', 'done');
+    setProgress(20, 'Scanning files…');
+    await yield_();
+
+    // ── 2. Detect endnotes file ──
+    setStep('ps-detect', 'active');
+    await yield_();
+
+    const allFiles = Object.keys(zip.files);
+    const xhtmlFiles = allFiles.filter(n => (n.endsWith('.xhtml') || n.endsWith('.html')) && !zip.files[n].dir);
+
+    let endnotesPath = null;
+    let endnotesText = '';
+
+    for (const path of xhtmlFiles) {
+      const text = await zip.files[path].async('string');
+      if (
+        text.includes('role="doc-endnotes"') ||
+        text.includes('doc-endnotes') ||
+        text.includes('ol class="endnotes"') ||
+        path.toLowerCase().includes('part0031') ||
+        path.toLowerCase().includes('endnote') ||
+        path.toLowerCase().includes('notes')
+      ) {
+        endnotesPath = path;
+        endnotesText = text;
+        break;
+      }
+    }
+
+    if (!endnotesPath) {
+      // Fallback: find file with most <li id="note_"> elements
+      let best = { path: null, count: 0, text: '' };
+      for (const path of xhtmlFiles) {
+        const text = await zip.files[path].async('string');
+        const count = (text.match(/id="note_/g) || []).length;
+        if (count > best.count) best = { path, count, text };
+      }
+      if (best.count > 0) { endnotesPath = best.path; endnotesText = best.text; }
+    }
+
+    if (!endnotesPath) throw new Error('Could not find the endnotes file in this EPUB. The file structure may be different from expected.');
+
+    const endnotesBasename = endnotesPath.split('/').pop();
+    log('info', `Endnotes file: ${endnotesBasename}`);
+    setStep('ps-detect', 'done');
+    setProgress(35, 'Building anchor map…');
+    await yield_();
+
+    // ── 3. Build map ──
+    setStep('ps-map', 'active');
+    await yield_();
+
+    const map = buildIdToNoteMap(endnotesText);
+    const mapSize = Object.keys(map).length;
+
+    if (mapSize === 0) throw new Error('Anchor map came back empty — this EPUB may not have the KF8 off-by-one bug, or uses a different structure.');
+
+    log('info', `Anchor map: ${mapSize} entries`);
+    setStep('ps-map', 'done');
+    setProgress(50, 'Fixing footnote links…');
+    await yield_();
+
+    // ── 4. Fix chapter files ──
+    setStep('ps-fix', 'active');
+    await yield_();
+
+    let totalLinkFixes = 0;
+    let filesFixed = 0;
+    const newZip = zip;
+
+    const chapterFiles = xhtmlFiles.filter(p => p !== endnotesPath && zip.files[p]);
+    for (let i = 0; i < chapterFiles.length; i++) {
+      const path = chapterFiles[i];
+      const text = await zip.files[path].async('string');
+      const fname = path.split('/').pop();
+
+      if (!text.includes(endnotesBasename.replace('.xhtml', ''))) {
+        log('skip', `${fname} — no links to endnotes`);
+        continue;
+      }
+
+      const { fixed, fixes } = fixChapterFile(text, map, endnotesBasename);
+      if (fixes > 0) {
+        newZip.file(path, fixed);
+        totalLinkFixes += fixes;
+        filesFixed++;
+        log('fix', `${fname} — ${fixes} link${fixes !== 1 ? 's' : ''} corrected`);
+      } else {
+        log('ok', `${fname} — no fixes needed`);
+      }
+
+      setProgress(50 + Math.round((i / chapterFiles.length) * 20), 'Fixing footnote links…');
+      await yield_();
+    }
+
+    setStep('ps-fix', 'done');
+    setProgress(70, 'Styling back-links…');
+    await yield_();
+
+    // ── 5. Style back-links ──
+    setStep('ps-backlink', 'active');
+    await yield_();
+
+    let backlinkCount = 0;
+    if (doBacklinks) {
+      const { result, count } = styleBacklinks(endnotesText);
+      backlinkCount = count;
+      if (count > 0) {
+        newZip.file(endnotesPath, result);
+        log('fix', `${endnotesBasename} — ${count} back-link${count !== 1 ? 's' : ''} styled as ↩`);
+      } else {
+        log('ok', `${endnotesBasename} — no back-links found to style`);
+      }
+    } else {
+      log('skip', `Back-link styling disabled`);
+    }
+
+    setStep('ps-backlink', 'done');
+    setProgress(80, 'Repacking EPUB…');
+    await yield_();
+
+    // ── 6. Repack ──
+    setStep('ps-pack', 'active');
+    await yield_();
+
+    // EPUB spec: mimetype must be first and uncompressed
+    const mimetypeContent = await zip.files['mimetype']?.async('string') || 'application/epub+zip';
+    const outputZip = new JSZip();
+    outputZip.file('mimetype', mimetypeContent, { compression: 'STORE' });
+
+    // Copy all other files
+    for (const [path, zipFile] of Object.entries(newZip.files)) {
+      if (path === 'mimetype' || zipFile.dir) continue;
+      const content = await zipFile.async('arraybuffer');
+      outputZip.file(path, content);
+    }
+
+    const blob = await outputZip.generateAsync({
+      type: 'blob',
+      mimeType: 'application/epub+zip',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 }
+    });
+
+    setStep('ps-pack', 'done');
+    setProgress(100, 'Done!');
+    await yield_();
+
+    // ── Show result ──
+    const outName = file.name.replace(/\.epub$/i, '_fixed.epub');
+    showSuccess({ blob, outName, totalLinkFixes, filesFixed, backlinkCount, logs });
+
+  } catch (err) {
+    showError(err.message, logs);
+  }
+}
+
+function showSuccess({ blob, outName, totalLinkFixes, filesFixed, backlinkCount, logs }) {
+  progWrap.style.display = 'none';
+  resultWrap.style.display = 'block';
+
+  const logHtml = logs.map(l => `
+    <div class="log-line">
+      <span class="lt lt-${l.type}">${l.type.toUpperCase()}</span>
+      <span>${l.msg}</span>
+    </div>`).join('');
+
+  resultWrap.innerHTML = `
+    <div class="result-card success">
+      <div class="result-header">
+        <span class="result-icon">✅</span>
+        <div>
+          <div class="result-title">Fixed successfully</div>
+          <div class="result-sub">${outName}</div>
+        </div>
+      </div>
+      <div class="result-stats">
+        <div class="stat"><span class="stat-n">${totalLinkFixes}</span><span class="stat-label">Links fixed</span></div>
+        <div class="stat"><span class="stat-n">${filesFixed}</span><span class="stat-label">Files changed</span></div>
+        <div class="stat"><span class="stat-n">${backlinkCount}</span><span class="stat-label">Back-links styled</span></div>
+      </div>
+      <div class="result-log">${logHtml}</div>
+      <div class="result-actions">
+        <button class="dl-btn" id="dlBtn">⬇ Download Fixed EPUB</button>
+        <button class="reset-btn" id="resetBtn">Fix another file</button>
+      </div>
+    </div>`;
+
+  document.getElementById('dlBtn').onclick = () => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = outName; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  document.getElementById('resetBtn').onclick = reset;
+}
+
+function showError(msg, logs = []) {
+  progWrap.style.display = 'none';
+  resultWrap.style.display = 'block';
+
+  const logHtml = logs.map(l => `
+    <div class="log-line">
+      <span class="lt lt-${l.type}">${l.type.toUpperCase()}</span>
+      <span>${l.msg}</span>
+    </div>`).join('');
+
+  resultWrap.innerHTML = `
+    <div class="result-card error">
+      <div class="result-header">
+        <span class="result-icon">❌</span>
+        <div>
+          <div class="result-title">Something went wrong</div>
+          <div class="result-sub">${msg}</div>
+        </div>
+      </div>
+      ${logs.length ? `<div class="result-log">${logHtml}</div>` : ''}
+      <div class="result-actions">
+        <button class="reset-btn" id="resetBtn">Try again</button>
+      </div>
+    </div>`;
+
+  document.getElementById('resetBtn').onclick = reset;
+}
+
+function reset() {
+  resultWrap.style.display = 'none';
+  resultWrap.innerHTML = '';
+  progWrap.style.display = 'none';
+  dropZone.style.display = 'block';
+  document.querySelector('.options').style.display = 'flex';
+  fileInput.value = '';
+  setProgress(0, 'Starting…');
+  ['ps-unzip','ps-detect','ps-map','ps-fix','ps-backlink','ps-pack'].forEach(id => setStep(id, ''));
+}
+</script>
+</body>
+</html>
